@@ -1,0 +1,40 @@
+# Raw data
+csvs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Distribution / build
+build/
+dist/
+
+# Outputs (keep the folder via .gitkeep; ignore generated artifacts)
+outputs/figures/*
+outputs/*.csv
+outputs/*.png
+outputs/*.jpg
+outputs/*.svg
+!outputs/.gitkeep
