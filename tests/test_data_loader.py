@@ -68,6 +68,100 @@ def test_int_columns_are_integer() -> None:
         )
 
 
+def test_int_columns_are_nullable_int64() -> None:
+    """Lock in the ``Int64`` (nullable) choice over plain ``int64``.
+
+    The whole point of the data-loader fix was to use pandas' nullable
+    ``Int64`` so we don't silently lose any future missing values. A
+    regression to plain ``int64`` would re-introduce the silent NaN→0 bug
+    that motivated the change in the first place.
+    """
+    df = load_train(TRAIN_PATH)
+    for col in INT_COLUMNS:
+        assert df[col].dtype == pd.Int64Dtype(), (
+            f"Expected {col} to be nullable Int64 (pd.Int64Dtype), "
+            f"got {df[col].dtype}"
+        )
+
+
+def test_survived_column_is_nullable_int64() -> None:
+    """``Survived`` must also be nullable ``Int64`` for the same reason."""
+    df = load_train(TRAIN_PATH)
+    assert df["Survived"].dtype == pd.Int64Dtype(), (
+        f"Expected Survived to be nullable Int64 (pd.Int64Dtype), "
+        f"got {df['Survived'].dtype}"
+    )
+
+
+def test_survived_non_binary_raises() -> None:
+    """A non-0/1 value in ``Survived`` must raise ``ValueError`` (regression
+    guard for the validation in ``_coerce_dtypes``).
+    """
+    import tempfile
+
+    csv_text = (
+        "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
+        "Cabin,Embarked\n"
+        "1,2,3,T,1,22.0,1,0,A,7.25,,S\n"
+        "2,0,3,T,2,38.0,1,0,B,71.2833,,C\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+        f.write(csv_text)
+        path = f.name
+    try:
+        with pytest.raises(ValueError, match="unexpected values"):
+            load_train(path)
+    finally:
+        Path(path).unlink()
+
+
+def test_int_columns_preserve_na() -> None:
+    """A missing value in an ``INT_COLUMNS`` cell must be preserved as ``<NA>``
+    in the loaded ``Int64`` column (this is the whole reason the loader uses
+    nullable ``Int64`` instead of plain ``int64``).
+    """
+    import tempfile
+
+    csv_text = (
+        "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
+        "Cabin,Embarked\n"
+        "1,1,,T,1,22.0,1,0,A,7.25,,S\n"  # Pclass empty
+        "2,0,3,T,2,38.0,,0,B,71.2833,,C\n"  # SibSp empty
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+        f.write(csv_text)
+        path = f.name
+    try:
+        df = load_train(path)
+        assert df["Pclass"].isna().iloc[0], "Pclass NA was not preserved"
+        assert df["SibSp"].isna().iloc[1], "SibSp NA was not preserved"
+    finally:
+        Path(path).unlink()
+
+
+def test_survived_preserves_na() -> None:
+    """A missing ``Survived`` value must load as ``<NA>`` rather than raising
+    or silently coercing to a wrong value.
+    """
+    import tempfile
+
+    csv_text = (
+        "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
+        "Cabin,Embarked\n"
+        "1,,3,T,1,22.0,1,0,A,7.25,,S\n"
+        "2,0,3,T,2,38.0,1,0,B,71.2833,,C\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+        f.write(csv_text)
+        path = f.name
+    try:
+        df = load_train(path)
+        assert df["Survived"].isna().iloc[0], "Survived NA was not preserved"
+        assert df["Survived"].iloc[1] == 0
+    finally:
+        Path(path).unlink()
+
+
 def test_load_train_missing_file_raises() -> None:
     with pytest.raises(FileNotFoundError):
         load_train(path="csvs/does_not_exist.csv")
