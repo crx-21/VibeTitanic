@@ -64,13 +64,15 @@ def _coerce_dtypes(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             # ``Int64`` (capital I) is nullable; ``int64`` is not. Use Int64 so
             # we don't silently lose any future missing values.
-            out[col] = pd.array(out[col], dtype="int64")
+            out[col] = pd.array(out[col], dtype="Int64")
 
     if "Survived" in out.columns:
-        out["Survived"] = pd.array(out["Survived"], dtype="int64")
+        out["Survived"] = pd.array(out["Survived"], dtype="Int64")
         # Sanity-check the target is binary. Silent 0/2 values would be a
-        # disaster for a classification model.
-        unique = sorted(out["Survived"].unique().tolist())
+        # disaster for a classification model. Drop NA before sorting because
+        # ``sorted`` on an ``Int64`` Series containing ``<NA>`` raises
+        # ``TypeError: boolean value of NA is ambiguous``.
+        unique = sorted(out["Survived"].dropna().unique().tolist())
         if unique not in ([0], [1], [0, 1]):
             raise ValueError(
                 f"Train CSV 'Survived' column has unexpected values: {unique}. "
