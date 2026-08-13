@@ -57,11 +57,14 @@ def test_categorical_columns_are_pandas_category() -> None:
         )
 
 
-def test_int_columns_are_int64() -> None:
+def test_int_columns_are_integer() -> None:
     df = load_train(TRAIN_PATH)
     for col in INT_COLUMNS:
-        assert df[col].dtype == "int64", (
-            f"Expected {col} to be int64, got {df[col].dtype}"
+        # Use the dtype-family check rather than an exact string compare, so
+        # this stays correct whether the loader returns nullable ``Int64`` or
+        # the plain numpy ``int64`` (both are valid integer dtypes).
+        assert pd.api.types.is_integer_dtype(df[col].dtype), (
+            f"Expected {col} to be an integer dtype, got {df[col].dtype}"
         )
 
 
