@@ -40,7 +40,21 @@ EXPECTED_TRAIN_EXTRA = ("Survived",)
 EXPECTED_TEST_EXTRA: tuple[str, ...] = ()
 
 # Columns we want as pandas Categorical (low cardinality, repeated strings).
+# We pin the category set explicitly so train and test always share the same
+# CategoricalDtype, even if one split happens to miss a rare value (e.g. an
+# Embarked='Q' row only in test). Without this, ``astype("category")`` infers
+# the categories per-call, and train/test end up with different dtype objects
+# — which then breaks anything categorical-aware downstream (one-hot encoding,
+# target encoding, XGBoost with enable_categorical=True, etc.).
 CATEGORICAL_COLUMNS = ("Sex", "Embarked")
+#: Canonical category order for each categorical column. Stable across calls
+#: so that ``pd.api.types.is_categorical(df["Sex"])`` and equality checks
+#: between train and test hold. ``Embarked`` lists the three known ports; the
+#: missing-value handling is done in ``_coerce_dtypes`` via ``categories=...``.
+CATEGORICAL_DTYPES: dict[str, pd.CategoricalDtype] = {
+    "Sex": pd.CategoricalDtype(categories=["female", "male"], ordered=False),
+    "Embarked": pd.CategoricalDtype(categories=["C", "Q", "S"], ordered=False),
+}
 
 # Columns that must be integer-typed for downstream code.
 INT_COLUMNS = ("PassengerId", "Pclass", "SibSp", "Parch")
@@ -81,7 +95,11 @@ def _coerce_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in CATEGORICAL_COLUMNS:
         if col in out.columns:
-            out[col] = out[col].astype("category")
+            # Pin the dtype to the canonical categories (see CATEGORICAL_DTYPES)
+            # rather than ``astype("category")``, which would infer categories
+            # from whatever rows appear in this particular DataFrame and could
+            # produce a different dtype on train vs test.
+            out[col] = out[col].astype(CATEGORICAL_DTYPES[col])
 
     return out
 
@@ -148,6 +166,7 @@ __all__ = [
     "EXPECTED_COMMON_COLUMNS",
     "EXPECTED_TRAIN_EXTRA",
     "CATEGORICAL_COLUMNS",
+    "CATEGORICAL_DTYPES",
     "INT_COLUMNS",
     "load_train",
     "load_test",

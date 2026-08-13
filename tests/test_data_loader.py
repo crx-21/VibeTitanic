@@ -14,6 +14,7 @@ import pytest
 
 from src.data_loader import (
     CATEGORICAL_COLUMNS,
+    CATEGORICAL_DTYPES,
     EXPECTED_COMMON_COLUMNS,
     INT_COLUMNS,
     load_test,
@@ -55,6 +56,57 @@ def test_categorical_columns_are_pandas_category() -> None:
         assert isinstance(df[col].dtype, pd.CategoricalDtype), (
             f"Expected {col} to be categorical, got {df[col].dtype}"
         )
+
+
+def test_categorical_columns_share_dtype_across_train_and_test() -> None:
+    """Train and test must end up with the *same* CategoricalDtype per
+    column, so downstream categorical-aware code (one-hot, target
+    encoding, XGBoost with enable_categorical=True) doesn't break on
+    a category that appears in one split but not the other.
+
+    The loader pins the categories via ``CATEGORICAL_DTYPES`` rather
+    than inferring them with ``astype("category")`` — this test
+    locks in that pinning.
+    """
+    train_df = load_train(TRAIN_PATH)
+    test_df = load_test(TEST_PATH)
+    for col in CATEGORICAL_COLUMNS:
+        assert train_df[col].dtype == test_df[col].dtype, (
+            f"{col} dtype differs between train and test: "
+            f"train={train_df[col].dtype}, test={test_df[col].dtype}"
+        )
+        assert train_df[col].dtype == CATEGORICAL_DTYPES[col], (
+            f"{col} dtype is not the canonical pinned CategoricalDtype: "
+            f"got {train_df[col].dtype}, expected {CATEGORICAL_DTYPES[col]}"
+        )
+
+
+def test_embarked_preserves_na() -> None:
+    """A missing ``Embarked`` cell must load as ``<NA>`` in the
+    categorical column rather than coercing to a wrong value or
+    silently dropping the row. ``Sex`` has no missing values in the
+    Kaggle data, so we only test ``Embarked`` here.
+    """
+    import tempfile
+
+    csv_text = (
+        "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
+        "Cabin,Embarked\n"
+        "1,1,3,T,male,22.0,1,0,A,7.25,,\n"  # Embarked empty
+        "2,0,3,T,female,38.0,1,0,B,71.2833,,C\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+        f.write(csv_text)
+        path = f.name
+    try:
+        df = load_train(path)
+        assert df["Embarked"].isna().iloc[0], "Embarked NA was not preserved"
+        assert df["Embarked"].iloc[1] == "C"
+        # Categories are still pinned to {C, Q, S} — NaN is not a category
+        # value, it's the missing-value marker on the column.
+        assert list(df["Embarked"].dtype.categories) == ["C", "Q", "S"]
+    finally:
+        Path(path).unlink()
 
 
 def test_int_columns_are_integer() -> None:
@@ -102,8 +154,8 @@ def test_survived_non_binary_raises() -> None:
     csv_text = (
         "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
         "Cabin,Embarked\n"
-        "1,2,3,T,1,22.0,1,0,A,7.25,,S\n"
-        "2,0,3,T,2,38.0,1,0,B,71.2833,,C\n"
+        "1,2,3,T,male,22.0,1,0,A,7.25,,S\n"
+        "2,0,3,T,female,38.0,1,0,B,71.2833,,C\n"
     )
     with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
         f.write(csv_text)
@@ -125,8 +177,8 @@ def test_int_columns_preserve_na() -> None:
     csv_text = (
         "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
         "Cabin,Embarked\n"
-        "1,1,,T,1,22.0,1,0,A,7.25,,S\n"  # Pclass empty
-        "2,0,3,T,2,38.0,,0,B,71.2833,,C\n"  # SibSp empty
+        "1,1,,T,male,22.0,1,0,A,7.25,,S\n"  # Pclass empty
+        "2,0,3,T,female,38.0,,0,B,71.2833,,C\n"  # SibSp empty
     )
     with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
         f.write(csv_text)
@@ -148,8 +200,8 @@ def test_survived_preserves_na() -> None:
     csv_text = (
         "PassengerId,Survived,Pclass,Name,Sex,Age,SibSp,Parch,Ticket,Fare,"
         "Cabin,Embarked\n"
-        "1,,3,T,1,22.0,1,0,A,7.25,,S\n"
-        "2,0,3,T,2,38.0,1,0,B,71.2833,,C\n"
+        "1,,3,T,male,22.0,1,0,A,7.25,,S\n"
+        "2,0,3,T,female,38.0,1,0,B,71.2833,,C\n"
     )
     with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
         f.write(csv_text)
