@@ -1,115 +1,109 @@
 import pandas as pd
 import numpy as np
-import re
 
 class PreprocessingPipeline:
     """
-    Preprocessing pipeline for the Titanic dataset to prepare data for a machine learning model.
-    Handles imputation, feature engineering, and encoding.
+    Preprocessing pipeline for the Titanic dataset.
+    Handles imputation, feature engineering, and encoding while maintaining
+    strict separation between metadata (PassengerId, Survived) and ML features.
     """
     def __init__(self):
         self.age_medians = {}
+        self.overall_age_median = 28
+        self.fare_median = None
         self.embarked_mode = None
-        self.columns_after_encoding = None
+        self.ticket_counts = {}
+        self.feature_columns = None
         self.title_mapping = {
             'Mr': 'Mr', 'Mrs': 'Mrs', 'Miss': 'Miss', 'Master': 'Master',
+            'Mlle': 'Miss', 'Ms': 'Miss', 'Mme': 'Mrs',
             'Dr': 'Rare', 'Rev': 'Rare', 'Col': 'Rare', 'Major': 'Rare',
-            ' Capt': 'Rare', 'Countess': 'Rare', 'Viscount': 'Rare',
+            'Capt': 'Rare', 'Countess': 'Rare', 'Viscount': 'Rare',
             'Viscountess': 'Rare', 'Sir': 'Rare', 'Lady': 'Rare',
-            'Jonkheer': 'Rare', 'Don': 'Rare', 'Baron': 'Baron', 'Baroness': 'Baroness'
+            'Jonkheer': 'Rare', 'Don': 'Rare', 'Dona': 'Rare'
         }
 
     def fit(self, df):
-        """
-        Learn imputation values and encoding schemas from the training set.
-        """
+        """Learn imputation statistics and ticket counts from training data."""
         df_copy = df.copy()
 
-        # 1. Title Extraction for Age Imputation
-        # Extract title using regex from 'Name' column
+        # 1. Title Extraction & Age Medians
         titles = df_copy['Name'].str.extract(r', ([A-Za-z]+)\.', expand=False)
-        df_copy['Title'] = titles
+        df_copy['Title'] = titles.map(self.title_mapping).fillna('Rare')
 
-        # Group rare titles
-        df_copy['Title'] = df_copy['Title'].map(self.title_mapping).fillna('Rare')
-
-        # 2. Calculate median age per title
         self.age_medians = df_copy.groupby('Title')['Age'].median().to_dict()
+        self.overall_age_median = df_copy['Age'].median() if not np.isnan(df_copy['Age'].median()) else 28
+        self.fare_median = df_copy['Fare'].median()
 
-        # 3. Calculate mode for Embarked
         if not df_copy['Embarked'].mode().empty:
             self.embarked_mode = df_copy['Embarked'].mode()[0]
+
+        # 2. Ticket Frequency
+        self.ticket_counts = df_copy['Ticket'].value_counts().to_dict()
+
+        # Record feature columns by performing a transform.
+        self.feature_columns = None
+        transformed_df = self.transform(df)
+        meta_cols = {'PassengerId', 'Survived'}
+        self.feature_columns = [col for col in transformed_df.columns if col not in meta_cols]
 
         return self
 
     def transform(self, df):
-        """
-        Apply the learned transformations to the dataset.
-        """
+        """Apply learned transformations to train or test data."""
         df = df.copy()
 
-        # 1. Title Extraction
+        # Keep track of metadata columns if present
+        target = df['Survived'] if 'Survived' in df.columns else None
+        passenger_ids = df['PassengerId'] if 'PassengerId' in df.columns else None
+
+        # 1. Title Extraction & Imputation
         titles = df['Name'].str.extract(r', ([A-Za-z]+)\.', expand=False)
         df['Title'] = titles.map(self.title_mapping).fillna('Rare')
 
-        # 2. Age Imputation
-        # Fill missing Age values using the medians learned during fit()
         df['Age'] = df['Age'].fillna(df['Title'].map(self.age_medians))
-        # Fallback for any titles not seen during fit
-        df['Age'] = df['Age'].fillna(df['Age'].median() if not np.isnan(df['Age'].median()) else 28)
-
-        # 3. Family Dynamics
-        df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
-        df['IsAlone'] = (df['FamilySize'] == 1).astype(int)
-
-        # 4. Cabin Transformation
-        df['HasCabin'] = df['Cabin'].notna().astype(int)
-        df['Deck'] = df['Cabin'].str[0].fillna('U') # 'U' for Unknown
-
-        # 5. Embarked Imputation
+        df['Age'] = df['Age'].fillna(self.overall_age_median)
+        df['Fare'] = df['Fare'].fillna(self.fare_median)
         df['Embarked'] = df['Embarked'].fillna(self.embarked_mode)
 
-        # 6. Encoding
-        # We use pd.get_dummies for One-Hot Encoding
-        categorical_cols = ['Sex', 'Embarked', 'Title', 'Deck']
-        df = pd.get_dummies(df, columns=categorical_cols)
+        # 2. Feature Engineering
+        df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
+        df['IsAlone'] = (df['FamilySize'] == 1).astype(int)
+        df['HasCabin'] = df['Cabin'].notna().astype(int)
+        df['Deck'] = df['Cabin'].str[0].fillna('U')
 
-        # Drop non-predictive or redundant columns
-        cols_to_drop = ['Name', 'Ticket', 'Cabin']
-        df = df.drop(columns=[col for col in cols_to_drop if col in df.columns])
+        # Use learned ticket counts with fallback to local count
+        learned_counts = df['Ticket'].map(self.ticket_counts)
+        local_counts = df.groupby('Ticket')['Ticket'].transform('count')
+        df['TicketGroupSize'] = learned_counts.fillna(local_counts).astype(int)
 
-        # Handle PassengerId: move it to a separate variable or keep it
-        # based on whether we are training or predicting.
-        # For now, we keep it but the modeling part will split it.
+        df['Pclass_Sex'] = df['Pclass'].astype(str) + '_' + df['Sex'].astype(str)
 
-        # Ensure consistent columns between train and test
-        if self.columns_after_encoding is not None:
-            # Add missing columns with 0
-            for col in self.columns_after_encoding:
-                if col not in df.columns:
-                    df[col] = 0
-            # Remove extra columns
-            df = df[self.columns_after_encoding]
-        else:
-            # This will be set during fit_transform for the training set
-            pass
+        # 3. Categorical Encoding
+        categorical_cols = ['Sex', 'Embarked', 'Title', 'Deck', 'Pclass_Sex']
+        df_encoded = pd.get_dummies(df, columns=categorical_cols, dtype=int)
 
-        return df
+        # Drop non-predictive/redundant raw columns for the feature set
+        cols_to_drop = ['PassengerId', 'Survived', 'Name', 'Ticket', 'Cabin']
+        features_df = df_encoded.drop(columns=[col for col in cols_to_drop if col in df_encoded.columns])
+
+        # 4. Feature Column Alignment
+        if self.feature_columns is not None:
+            for col in self.feature_columns:
+                if col not in features_df.columns:
+                    features_df[col] = 0
+            features_df = features_df[self.feature_columns]
+
+        # Re-attach PassengerId and Survived
+        result_df = features_df.copy()
+        if passenger_ids is not None:
+            result_df.insert(0, 'PassengerId', passenger_ids)
+        if target is not None:
+            result_df['Survived'] = target
+
+        return result_df
 
     def fit_transform(self, df):
-        """
-        Fit the pipeline and then transform the data.
-        """
+        """Fit parameters on training set and return transformed data."""
         self.fit(df)
-        transformed_df = self.transform(df)
-
-        # Store the columns after encoding to ensure consistency in transform()
-        # We remove PassengerId and Survived from the feature set but keep them in the DF
-        # for tracking. However, the 'columns_after_encoding' should represent the
-        # features we expect.
-
-        # Let's define what the final features should be.
-        # Since we are in fit_transform (usually on train), we take whatever we got.
-        self.columns_after_encoding = transformed_df.columns.tolist()
-
-        return transformed_df
+        return self.transform(df)
